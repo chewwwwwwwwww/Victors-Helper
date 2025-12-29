@@ -97,35 +97,31 @@ export function Toolbar({
 
   return (
     <div
-      className="fixed top-0 right-0 z-30 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-4 py-3 transition-[left] duration-200 ease-in-out"
+      className="fixed top-0 right-0 z-30 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 transition-[left] duration-200 ease-in-out"
       style={{ left: sidebarCollapsed ? "3rem" : "22rem" }}
     >
-      <div className="flex flex-wrap items-center gap-4">
+      {/* Row 1: Main controls */}
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-100 dark:border-gray-800">
         {/* Quick Actions - Icon buttons */}
         <div className="flex items-center gap-1">
           <IconButton
-            icon={<Plus className="w-5 h-5" />}
+            icon={<Plus className="w-4 h-4" />}
             label="Create New Song"
             onClick={onCreateNew}
           />
           <IconButton
-            icon={<FileText className="w-5 h-5" />}
+            icon={<FileText className="w-4 h-4" />}
             label="Load Sample Song"
             onClick={onLoadSample}
           />
           <IconButton
-            icon={<Sparkles className="w-5 h-5" />}
+            icon={<Sparkles className="w-4 h-4" />}
             label="AI Import"
             onClick={onImport}
           />
         </div>
 
-        <div className="w-px h-6 bg-gray-200 dark:bg-gray-700" />
-
-        {/* Block Type Toolbar - Drag to add blocks */}
-        <BlockTypeToolbar />
-
-        <div className="w-px h-6 bg-gray-200 dark:bg-gray-700" />
+        <div className="w-px h-5 bg-gray-200 dark:bg-gray-700" />
 
         {/* Title */}
         <div className="flex-1 min-w-0">
@@ -138,7 +134,7 @@ export function Toolbar({
               onKeyDown={handleTitleKeyDown}
               autoFocus
               className="
-                text-xl font-semibold w-full
+                text-lg font-semibold w-full
                 bg-transparent border-b-2 border-blue-500
                 focus:outline-none
                 text-gray-900 dark:text-white
@@ -148,7 +144,7 @@ export function Toolbar({
             <h1
               onClick={handleTitleClick}
               className="
-                text-xl font-semibold truncate cursor-text
+                text-lg font-semibold truncate cursor-text
                 text-gray-900 dark:text-white
                 hover:text-blue-600 dark:hover:text-blue-400
               "
@@ -170,8 +166,8 @@ export function Toolbar({
         <button
           onClick={onToggleChords}
           className={`
-            px-3 py-1.5 text-sm rounded-lg
-            transition-colors
+            px-2 py-1 text-xs rounded-md
+            transition-colors whitespace-nowrap
             ${
               chordsVisible
                 ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300"
@@ -183,26 +179,26 @@ export function Toolbar({
         </button>
 
         {/* Undo/Redo */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           <IconButton
-            icon={<Undo className="w-5 h-5" />}
+            icon={<Undo className="w-4 h-4" />}
             label="Undo (Ctrl+Z)"
             onClick={onUndo}
             disabled={!canUndo}
           />
           <IconButton
-            icon={<Redo className="w-5 h-5" />}
+            icon={<Redo className="w-4 h-4" />}
             label="Redo (Ctrl+Shift+Z)"
             onClick={onRedo}
             disabled={!canRedo}
           />
         </div>
 
-        <div className="w-px h-6 bg-gray-200 dark:bg-gray-700" />
+        <div className="w-px h-5 bg-gray-200 dark:bg-gray-700" />
 
         {/* Playlist, Duplicate & Delete */}
         {songId && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             <AddToPlaylistDropdown
               songId={songId}
               playlists={playlists}
@@ -211,12 +207,12 @@ export function Toolbar({
               onCreatePlaylist={onCreatePlaylist}
             />
             <IconButton
-              icon={<Copy className="w-5 h-5" />}
+              icon={<Copy className="w-4 h-4" />}
               label="Duplicate Song"
               onClick={onDuplicateSong}
             />
             <IconButton
-              icon={<Trash2 className="w-5 h-5" />}
+              icon={<Trash2 className="w-4 h-4" />}
               label="Delete Song"
               onClick={onDeleteSong}
               variant="danger"
@@ -225,19 +221,22 @@ export function Toolbar({
         )}
 
         {/* Export */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onExport}
-            className="
-              px-3 py-1.5 text-sm rounded-lg
-              bg-blue-600 hover:bg-blue-700
-              text-white
-              transition-colors
-            "
-          >
-            Export PDF
-          </button>
-        </div>
+        <button
+          onClick={onExport}
+          className="
+            px-2 py-1 text-xs rounded-md
+            bg-blue-600 hover:bg-blue-700
+            text-white whitespace-nowrap
+            transition-colors
+          "
+        >
+          Export PDF
+        </button>
+      </div>
+
+      {/* Row 2: Block Type Toolbar - Drag to add blocks */}
+      <div className="flex items-center px-4 py-1.5 bg-gray-50 dark:bg-gray-800/50">
+        <BlockTypeToolbar />
       </div>
     </div>
   );

@@ -848,7 +848,7 @@ function AppContent() {
 
         {/* Main Content */}
         <div
-          className="flex-1 overflow-auto pt-12 transition-[margin] duration-200 ease-in-out"
+          className="flex-1 overflow-auto pt-20 transition-[margin] duration-200 ease-in-out"
           style={{ marginLeft: sidebarCollapsed ? "3rem" : "22rem" }}
         >
           {/* Chart Area */}
