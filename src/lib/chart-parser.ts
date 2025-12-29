@@ -1,4 +1,14 @@
-import type { Song, Line, Chord, UUID, BarNotation } from "../types";
+import type {
+  Song,
+  Block,
+  SectionBlock,
+  ChordLyricsBlock,
+  BarNotationBlock,
+  Chord,
+  BarNotation,
+  UUID,
+  SectionType,
+} from "../types";
 import { v4 as uuidv4 } from "uuid";
 import { isValidChord } from "./chord-parser";
 
@@ -9,6 +19,62 @@ interface ImportSection {
   header: string;
   isBarNotation: boolean;
   content: string;
+}
+
+/**
+ * Section header patterns (case insensitive)
+ */
+const SECTION_HEADER_PATTERNS = [
+  /^(verse|chorus|bridge|intro|outro|pre-chorus|prechorus|turnaround|tag|coda|interlude|instrumental|hook|refrain|ending|vamp|solo|breakdown)\s*\d*\s*:?\s*$/i,
+  /^\[.*\]$/, // Bracketed headers like [Verse 1]
+  /^<.*>$/, // Angle bracket headers like <Chorus>
+];
+
+/**
+ * Check if a string is a section header
+ */
+function isSectionHeader(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return SECTION_HEADER_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/**
+ * Extract section type from a header string
+ */
+function extractSectionType(header: string): SectionType {
+  const lower = header.toLowerCase();
+
+  if (lower.includes("intro")) return "intro";
+  if (lower.includes("verse")) return "verse";
+  if (lower.includes("chorus")) return "chorus";
+  if (lower.includes("bridge")) return "bridge";
+  if (lower.includes("pre-chorus") || lower.includes("prechorus"))
+    return "pre-chorus";
+  if (lower.includes("outro") || lower.includes("ending")) return "outro";
+  if (lower.includes("interlude")) return "interlude";
+  if (
+    lower.includes("instrumental") ||
+    lower.includes("solo") ||
+    lower.includes("breakdown")
+  )
+    return "instrumental";
+  if (lower.includes("tag") || lower.includes("turnaround")) return "tag";
+  if (lower.includes("coda")) return "coda";
+
+  return "custom";
+}
+
+/**
+ * Clean up a section header label (remove brackets, colons, etc.)
+ */
+function cleanSectionLabel(header: string): string {
+  return header
+    .trim()
+    .replace(/^\[|\]$/g, "") // Remove [ ]
+    .replace(/^<|>$/g, "") // Remove < >
+    .replace(/:$/, "") // Remove trailing colon
+    .trim();
 }
 
 /**
@@ -86,100 +152,9 @@ export function isBarNotationLine(content: string): boolean {
 }
 
 /**
- * Parse bracket notation text into a Song structure.
- *
- * Format: [Chord]lyrics where [Chord] appears immediately before the syllable
- *
- * Example:
- *   "[G]Amazing [D]grace how [C]sweet the [G]sound"
- *   becomes lyrics "Amazing grace how sweet the sound"
- *   with chords G at 0, D at 8, C at 19, G at 30
+ * Parse a single line with bracket notation into a ChordLyricsBlock.
  */
-export function parseFromBracketNotation(
-  text: string,
-  options: { title?: string; id?: UUID; sections?: ImportSection[] } = {},
-): Song {
-  const parsedLines: Line[] = [];
-
-  // If we have sections from AI parser, use them for bar notation detection
-  if (options.sections && options.sections.length > 0) {
-    for (const section of options.sections) {
-      // Add section header as a line
-      if (section.header) {
-        parsedLines.push({
-          id: uuidv4(),
-          lyrics: section.header,
-          chords: [],
-        });
-      }
-
-      // Parse content based on whether it's bar notation
-      if (section.isBarNotation) {
-        // Parse bar notation
-        const barNotation = parseBarNotation(section.content);
-        parsedLines.push({
-          id: uuidv4(),
-          lyrics: "",
-          chords: [],
-          barNotation: barNotation || undefined,
-        });
-      } else {
-        // Parse bracket notation lines
-        const contentLines = section.content.split(/\r?\n/);
-        for (const line of contentLines) {
-          const parsedLine = parseBracketLine(line);
-          parsedLines.push(parsedLine);
-        }
-      }
-
-      // Add empty line after section
-      parsedLines.push({
-        id: uuidv4(),
-        lyrics: "",
-        chords: [],
-      });
-    }
-  } else {
-    // Fallback: parse text directly with auto-detection
-    const lines = text.split(/\r?\n/);
-
-    for (const line of lines) {
-      // Check if line looks like bar notation
-      if (isBarNotationLine(line)) {
-        const barNotation = parseBarNotation(line);
-        if (barNotation) {
-          parsedLines.push({
-            id: uuidv4(),
-            lyrics: "",
-            chords: [],
-            barNotation,
-          });
-          continue;
-        }
-      }
-
-      // Normal bracket notation parsing
-      const parsedLine = parseBracketLine(line);
-      parsedLines.push(parsedLine);
-    }
-  }
-
-  const now = new Date().toISOString();
-
-  return {
-    id: options.id || uuidv4(),
-    title: options.title,
-    createdAt: now,
-    updatedAt: now,
-    lines: parsedLines,
-    transpositionOffset: 0,
-  };
-}
-
-/**
- * Parse a single line with bracket notation.
- */
-function parseBracketLine(line: string): Line {
+function parseBracketLine(line: string): ChordLyricsBlock {
   const chords: Chord[] = [];
   let lyrics = "";
   let i = 0;
@@ -218,8 +193,138 @@ function parseBracketLine(line: string): Line {
 
   return {
     id: uuidv4(),
+    type: "chordLyricsLine",
     lyrics,
     chords,
+  };
+}
+
+/**
+ * Parse bracket notation text into a block-based Song structure.
+ *
+ * Format: [Chord]lyrics where [Chord] appears immediately before the syllable
+ *
+ * Example:
+ *   "[G]Amazing [D]grace how [C]sweet the [G]sound"
+ *   becomes lyrics "Amazing grace how sweet the sound"
+ *   with chords G at 0, D at 8, C at 19, G at 30
+ */
+export function parseFromBracketNotation(
+  text: string,
+  options: { title?: string; id?: UUID; sections?: ImportSection[] } = {},
+): Song {
+  const blocks: Block[] = [];
+  let currentSection: SectionBlock | null = null;
+
+  // Helper to push current section to blocks
+  const flushSection = () => {
+    if (currentSection && currentSection.children.length > 0) {
+      blocks.push(currentSection);
+      currentSection = null;
+    }
+  };
+
+  // If we have sections from AI parser, use them
+  if (options.sections && options.sections.length > 0) {
+    for (const section of options.sections) {
+      // Start a new section
+      currentSection = {
+        id: uuidv4(),
+        type: "section",
+        label: cleanSectionLabel(section.header) || "Section",
+        sectionType: extractSectionType(section.header),
+        children: [],
+      };
+
+      // Parse content based on whether it's bar notation
+      if (section.isBarNotation) {
+        const barNotation = parseBarNotation(section.content);
+        if (barNotation) {
+          currentSection.children.push({
+            id: uuidv4(),
+            type: "barNotationLine",
+            barNotation,
+          });
+        }
+      } else {
+        // Parse bracket notation lines
+        const contentLines = section.content.split(/\r?\n/);
+        for (const line of contentLines) {
+          const trimmed = line.trim();
+          if (trimmed) {
+            currentSection.children.push(parseBracketLine(line));
+          }
+        }
+      }
+
+      flushSection();
+    }
+  } else {
+    // Fallback: parse text directly with auto-detection
+    const lines = text.split(/\r?\n/);
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Skip empty lines (they act as section separators)
+      if (!trimmed) {
+        flushSection();
+        continue;
+      }
+
+      // Check if this is a section header
+      if (isSectionHeader(trimmed)) {
+        flushSection();
+        currentSection = {
+          id: uuidv4(),
+          type: "section",
+          label: cleanSectionLabel(trimmed),
+          sectionType: extractSectionType(trimmed),
+          children: [],
+        };
+        continue;
+      }
+
+      // Check if line looks like bar notation
+      if (isBarNotationLine(line)) {
+        const barNotation = parseBarNotation(line);
+        if (barNotation) {
+          const barBlock: BarNotationBlock = {
+            id: uuidv4(),
+            type: "barNotationLine",
+            barNotation,
+          };
+          if (currentSection) {
+            currentSection.children.push(barBlock);
+          } else {
+            blocks.push(barBlock);
+          }
+          continue;
+        }
+      }
+
+      // Normal bracket notation parsing
+      const chordLyricsBlock = parseBracketLine(line);
+      if (currentSection) {
+        currentSection.children.push(chordLyricsBlock);
+      } else {
+        blocks.push(chordLyricsBlock);
+      }
+    }
+
+    flushSection();
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: options.id || uuidv4(),
+    version: 2,
+    title: options.title,
+    createdAt: now,
+    updatedAt: now,
+    blocks,
+    transpositionOffset: 0,
   };
 }
 
@@ -235,37 +340,51 @@ export function barNotationToString(barNotation: BarNotation): string {
 }
 
 /**
- * Convert a Song back to bracket notation.
+ * Convert a block-based Song to bracket notation.
  */
 export function toBracketNotation(song: Song): string {
   const lines: string[] = [];
 
-  for (const line of song.lines) {
-    // Handle bar notation lines
-    if (line.barNotation) {
-      lines.push(barNotationToString(line.barNotation));
-    } else {
-      lines.push(lineToBracketNotation(line));
+  function processBlock(block: Block) {
+    if (block.type === "section") {
+      // Add section header
+      lines.push(`[${block.label}]`);
+      // Process children
+      for (const child of block.children) {
+        processBlock(child);
+      }
+      // Add empty line after section
+      lines.push("");
+    } else if (block.type === "chordLyricsLine") {
+      lines.push(chordLyricsBlockToBracketNotation(block));
+    } else if (block.type === "barNotationLine") {
+      lines.push(barNotationToString(block.barNotation));
+    } else if (block.type === "freeText") {
+      lines.push(block.text);
     }
+  }
+
+  for (const block of song.blocks) {
+    processBlock(block);
   }
 
   return lines.join("\n");
 }
 
 /**
- * Convert a single line to bracket notation.
+ * Convert a ChordLyricsBlock to bracket notation.
  */
-function lineToBracketNotation(line: Line): string {
-  if (line.chords.length === 0) {
-    return line.lyrics;
+function chordLyricsBlockToBracketNotation(block: ChordLyricsBlock): string {
+  if (block.chords.length === 0) {
+    return block.lyrics;
   }
 
   // Sort chords by charIndex descending to insert from end
-  const sortedChords = [...line.chords].sort(
+  const sortedChords = [...block.chords].sort(
     (a, b) => b.charIndex - a.charIndex,
   );
 
-  let result = line.lyrics;
+  let result = block.lyrics;
 
   for (const chord of sortedChords) {
     const insertPos = Math.min(chord.charIndex, result.length);
@@ -274,28 +393,6 @@ function lineToBracketNotation(line: Line): string {
   }
 
   return result;
-}
-
-/**
- * Create an empty song with default values.
- */
-export function createEmptySong(title?: string): Song {
-  const now = new Date().toISOString();
-
-  return {
-    id: uuidv4(),
-    title: title || "Untitled Song",
-    createdAt: now,
-    updatedAt: now,
-    lines: [
-      {
-        id: uuidv4(),
-        lyrics: "",
-        chords: [],
-      },
-    ],
-    transpositionOffset: 0,
-  };
 }
 
 /**

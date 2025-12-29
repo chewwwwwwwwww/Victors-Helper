@@ -119,7 +119,7 @@ export function LeftSidebar({
       result = result.filter(
         (song) =>
           song.title?.toLowerCase().includes(query) ||
-          song.artist?.toLowerCase().includes(query) ||
+          song.songwriters?.some((s) => s.toLowerCase().includes(query)) ||
           song.key?.toLowerCase().includes(query),
       );
     }
@@ -534,11 +534,12 @@ export function LeftSidebar({
             <div className="font-medium text-gray-900 dark:text-gray-100">
               {activeDragSong.title || "Untitled Song"}
             </div>
-            {activeDragSong.artist && (
-              <div className="text-xs text-gray-500 dark:text-gray-400">
-                {activeDragSong.artist}
-              </div>
-            )}
+            {activeDragSong.songwriters &&
+              activeDragSong.songwriters.length > 0 && (
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  {activeDragSong.songwriters.join(", ")}
+                </div>
+              )}
           </div>
         ) : null}
       </DragOverlay>

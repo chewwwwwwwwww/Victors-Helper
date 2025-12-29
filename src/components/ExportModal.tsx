@@ -7,7 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import type { ExportOptions, AnySong } from "../types";
+import type { ExportOptions, Song } from "../types";
 import type { PDFExportMode } from "../types/ui";
 import {
   buildPDFContent,
@@ -19,9 +19,9 @@ interface ExportModalProps {
   onClose: () => void;
   onExport: (options: ExportOptions, mode?: PDFExportMode) => Promise<void>;
   /** Single song for backward compatibility */
-  song?: AnySong | null;
+  song?: Song | null;
   /** Multiple songs for bulk export */
-  songs?: AnySong[];
+  songs?: Song[];
   isExporting: boolean;
   logoUrl?: string;
 }

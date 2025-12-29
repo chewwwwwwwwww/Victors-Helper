@@ -17,7 +17,6 @@ import { useImportQueue } from "./hooks/useImportQueue";
 import { usePDFExport } from "./hooks/usePDFExport";
 import { useLogoStorage } from "./hooks/useLogoStorage";
 import {
-  ChartViewer,
   BlockBasedChartViewer,
   Toolbar,
   EmptyState,
@@ -37,7 +36,6 @@ import type {
   BlockType,
   UUID,
 } from "./types";
-import { isSongV2 } from "./types/song";
 import type { PDFExportMode } from "./types/ui";
 import type { Playlist } from "./types/playlist";
 import { createSampleSong } from "./lib/chart-parser";
@@ -45,20 +43,15 @@ import { createSampleSong } from "./lib/chart-parser";
 function AppContent() {
   const {
     song,
-    songV2,
     isDirty,
     loadSong,
     createNewSong,
     updateChord,
     moveChord,
     deleteChord,
-    updateLineWithMode,
-    insertLine,
+    updateBlockLyrics,
     setTitle,
     updateMetadata,
-    setBarNotation,
-    setSectionColumn,
-    setSectionOrder,
     transpose,
     undo,
     redo,
@@ -130,35 +123,41 @@ function AppContent() {
 
   const chartRef = useRef<HTMLDivElement>(null);
 
-  // Auto-save effect - save songV2 if available, otherwise song (V1)
+  // Track whether initial load has happened to prevent reload loops
+  const initialLoadDoneRef = useRef(false);
+
+  // Auto-save effect
+  // Use a ref to avoid recreating the effect on every persistence change
+  const saveSongRef = useRef(persistence.saveSong);
+  saveSongRef.current = persistence.saveSong;
+
   useEffect(() => {
-    const songToSave = songV2 || song;
-    if (songToSave && isDirty) {
+    if (song && isDirty) {
       const timeoutId = setTimeout(() => {
-        persistence.saveSong(songToSave);
+        saveSongRef.current(song);
       }, 1000);
       return () => clearTimeout(timeoutId);
     }
-  }, [song, songV2, isDirty, persistence]);
+  }, [song, isDirty]);
 
-  // Load initial song or show empty state
+  // Load initial song or show empty state - ONLY runs on actual initial load
   useEffect(() => {
-    if (!persistence.isLoading && persistence.songs.length > 0 && !song) {
+    // Skip if already loaded or currently have a song
+    if (initialLoadDoneRef.current || song) {
+      return;
+    }
+
+    if (!persistence.isLoading && persistence.songs.length > 0) {
       const mostRecent = persistence.getSongList()[0];
       if (mostRecent) {
         const loadedSong = persistence.loadSong(mostRecent.id);
         if (loadedSong) {
           loadSong(loadedSong);
+          initialLoadDoneRef.current = true;
         }
       }
     }
-  }, [
-    persistence.isLoading,
-    persistence.songs.length,
-    song,
-    loadSong,
-    persistence,
-  ]);
+  }, [persistence.isLoading, song, loadSong, persistence]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -249,11 +248,29 @@ function AppContent() {
         const delta = e.key === "ArrowLeft" ? -1 : 1;
         const amount = e.shiftKey ? 5 : 1;
 
+        // Helper to find chord in blocks
+        const findChordInBlocks = (
+          blocks: import("./types").Block[],
+          lineId: string,
+          chordId: string,
+        ): { charIndex: number } | null => {
+          for (const block of blocks) {
+            if (block.type === "chordLyricsLine" && block.id === lineId) {
+              const chord = block.chords.find((c) => c.id === chordId);
+              if (chord) return { charIndex: chord.charIndex };
+            }
+            if (block.type === "section") {
+              const found = findChordInBlocks(block.children, lineId, chordId);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+
         selectedChords.forEach((ref) => {
-          const line = song.lines.find((l) => l.id === ref.lineId);
-          const chord = line?.chords.find((c) => c.id === ref.chordId);
-          if (chord) {
-            const newCharIndex = Math.max(0, chord.charIndex + delta * amount);
+          const found = findChordInBlocks(song.blocks, ref.lineId, ref.chordId);
+          if (found) {
+            const newCharIndex = Math.max(0, found.charIndex + delta * amount);
             moveChord(ref, newCharIndex);
           }
         });
@@ -287,9 +304,26 @@ function AppContent() {
   const handleChordDoubleClick = useCallback(
     (ref: ChordReference, event?: React.MouseEvent) => {
       if (!song) return;
-      const line = song.lines.find((l) => l.id === ref.lineId);
-      const chord = line?.chords.find((c) => c.id === ref.chordId);
-      if (chord) {
+
+      // Search in blocks
+      const findChordInBlocks = (
+        blocks: import("./types").Block[],
+      ): string | null => {
+        for (const block of blocks) {
+          if (block.type === "chordLyricsLine" && block.id === ref.lineId) {
+            const chord = block.chords.find((c) => c.id === ref.chordId);
+            if (chord) return chord.chord;
+          }
+          if (block.type === "section") {
+            const found = findChordInBlocks(block.children);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      const chordSymbol = findChordInBlocks(song.blocks);
+
+      if (chordSymbol) {
         // Get chord position from the clicked element or mouse position
         let x = 100;
         let y = 100;
@@ -314,7 +348,7 @@ function AppContent() {
 
         setEditingChord({
           ref,
-          value: chord.chord,
+          value: chordSymbol,
           x,
           y,
         });
@@ -348,16 +382,12 @@ function AppContent() {
     [moveChord],
   );
 
-  const handleLineDoubleClick = useCallback((lineId: string) => {
-    setEditingLineId(lineId);
-  }, []);
-
   const handleLyricCommit = useCallback(
-    (lineId: string, newValue: string, mode: LyricEditMode) => {
-      updateLineWithMode(lineId, newValue, mode);
+    (blockId: string, newValue: string, mode: LyricEditMode) => {
+      updateBlockLyrics(blockId as UUID, newValue, mode);
       setEditingLineId(null);
     },
-    [updateLineWithMode],
+    [updateBlockLyrics],
   );
 
   const handleLyricCancel = useCallback(() => {
@@ -365,35 +395,12 @@ function AppContent() {
   }, []);
 
   const handleLyricEnter = useCallback(
-    (lineId: string) => {
-      insertLine(lineId);
+    (blockId: string) => {
+      // Insert a new chord/lyrics block after this one
+      insertBlock("chordLyricsLine", blockId as UUID, null);
       setEditingLineId(null);
     },
-    [insertLine],
-  );
-
-  // Bar notation change handler
-  const handleBarNotationChange = useCallback(
-    (lineId: string, barNotation: import("./types").BarNotation | null) => {
-      setBarNotation(lineId, barNotation);
-    },
-    [setBarNotation],
-  );
-
-  // Section column change handler (for drag-and-drop)
-  const handleSectionColumnChange = useCallback(
-    (sectionId: string, column: "left" | "right" | null) => {
-      setSectionColumn(sectionId, column);
-    },
-    [setSectionColumn],
-  );
-
-  // Section order change handler (for reordering within a column)
-  const handleSectionOrderChange = useCallback(
-    (column: "left" | "right", newOrder: string[]) => {
-      setSectionOrder(column, newOrder);
-    },
-    [setSectionOrder],
+    [insertBlock],
   );
 
   // Block DnD handlers
@@ -438,8 +445,19 @@ function AppContent() {
         parentSectionId = overData.parentSectionId ?? null;
         position = overData.position ?? "after";
       } else if (overData?.type === "block") {
-        targetBlockId = over.id as UUID;
-        parentSectionId = overData.parentSectionId ?? null;
+        // Dropping directly onto a block
+        const overBlockType = overData.blockType as BlockType | undefined;
+
+        if (overBlockType === "section") {
+          // Dropping onto a section - insert into the section's children
+          targetBlockId = null; // Insert at beginning of section
+          parentSectionId = over.id as UUID; // The section itself is the parent
+          position = "after";
+        } else {
+          // Dropping onto a non-section block
+          targetBlockId = over.id as UUID;
+          parentSectionId = overData.parentSectionId ?? null;
+        }
       }
 
       if (activeData?.type === "newBlockTemplate") {
@@ -457,7 +475,7 @@ function AppContent() {
       } else if (activeData?.type === "block") {
         // Move existing block
         const blockId = active.id as UUID;
-        if (blockId !== targetBlockId) {
+        if (blockId !== targetBlockId && blockId !== parentSectionId) {
           // Check if the block being moved is a section (sections cannot be nested)
           const blockType = activeData.blockType as BlockType | undefined;
           const effectiveParentId =
@@ -707,9 +725,7 @@ function AppContent() {
 
   const handleBulkExportPlaylists = useCallback(
     (playlistIds: string[]) => {
-      const allSongs = persistence.getSongsForPlaylists(playlistIds);
-      // Filter to only V1 songs for PDF export
-      const songs = allSongs.filter((s): s is Song => !isSongV2(s));
+      const songs = persistence.getSongsForPlaylists(playlistIds);
       if (songs.length > 0) {
         setBulkExportSongs(songs);
         setActiveModal("bulkExport");
@@ -720,9 +736,7 @@ function AppContent() {
 
   const handleExportPlaylist = useCallback(
     (playlistId: string) => {
-      const allSongs = persistence.getSongsForPlaylists([playlistId]);
-      // Filter to only V1 songs for PDF export
-      const songs = allSongs.filter((s): s is Song => !isSongV2(s));
+      const songs = persistence.getSongsForPlaylists([playlistId]);
       if (songs.length > 0) {
         setBulkExportSongs(songs);
         setActiveModal("bulkExport");
@@ -815,13 +829,11 @@ function AppContent() {
         onDragEnd={handleBlockDragEnd}
       >
         {/* Toolbar */}
-        {(songV2 || song) && (
+        {song && (
           <Toolbar
-            title={songV2?.title || song?.title}
+            title={song.title}
             onTitleChange={setTitle}
-            transposeOffset={
-              songV2?.transpositionOffset || song?.transpositionOffset || 0
-            }
+            transposeOffset={song.transpositionOffset || 0}
             onTranspose={handleTranspose}
             onTransposeReset={handleTransposeReset}
             chordsVisible={chordsVisible}
@@ -837,7 +849,7 @@ function AppContent() {
             onLoadSample={handleLoadSample}
             onDeleteSong={handleDeleteSongClick}
             onDuplicateSong={handleDuplicateSong}
-            songId={songV2?.id || song?.id}
+            songId={song.id}
             playlists={persistence.playlists}
             onAddToPlaylist={handleAddToPlaylist}
             onRemoveFromPlaylist={handleRemoveFromPlaylist}
@@ -853,10 +865,10 @@ function AppContent() {
         >
           {/* Chart Area */}
           <div className="p-4 md:p-8">
-            {songV2 ? (
+            {song ? (
               <div ref={chartRef}>
                 <BlockBasedChartViewer
-                  song={songV2}
+                  song={song}
                   selectedChords={selectedChords}
                   chordsVisible={chordsVisible}
                   accidentalPreference={accidentalPreference}
@@ -872,34 +884,6 @@ function AppContent() {
                   selectedBlockId={selectedBlockId}
                   onBlockSelect={setSelectedBlockId}
                   onMetadataChange={updateMetadata}
-                  showFooterFields={true}
-                  logoUrl={logoStorage.logo || undefined}
-                  onLogoUpload={logoStorage.setLogo}
-                  onLogoClear={logoStorage.clearLogo}
-                />
-              </div>
-            ) : song ? (
-              <div ref={chartRef}>
-                <ChartViewer
-                  song={song}
-                  selectedChords={selectedChords}
-                  chordsVisible={chordsVisible}
-                  accidentalPreference={accidentalPreference}
-                  onChordSelect={handleChordSelect}
-                  onChordDoubleClick={handleChordDoubleClick}
-                  onChordMove={handleChordMove}
-                  onLineDoubleClick={handleLineDoubleClick}
-                  editingLineId={editingLineId}
-                  lyricEditMode={lyricEditMode}
-                  onLyricEditModeChange={setLyricEditMode}
-                  onLyricCommit={handleLyricCommit}
-                  onLyricCancel={handleLyricCancel}
-                  onLyricEnter={handleLyricEnter}
-                  onMetadataChange={updateMetadata}
-                  onBarNotationChange={handleBarNotationChange}
-                  onSectionColumnChange={handleSectionColumnChange}
-                  onSectionOrderChange={handleSectionOrderChange}
-                  enableSectionDrag={true}
                   showFooterFields={true}
                   logoUrl={logoStorage.logo || undefined}
                   onLogoUpload={logoStorage.setLogo}

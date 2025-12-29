@@ -1,17 +1,14 @@
-import type { ExportOptions, AnySong, Line } from "../types";
+import type {
+  ExportOptions,
+  Song,
+  Block,
+  SectionBlock,
+  ChordLyricsBlock,
+  BarNotationBlock,
+  FreeTextBlock,
+  Chord,
+} from "../types";
 import { transposeChord } from "./transposition";
-
-/** Check if a line is a section header */
-function isSectionHeader(lyrics: string): boolean {
-  const trimmed = lyrics.trim();
-  if (!trimmed) return false;
-  const patterns = [
-    /^(verse|chorus|bridge|intro|outro|pre-chorus|prechorus|turnaround|tag|coda|interlude|instrumental|hook|refrain|ending|vamp|solo|breakdown)\s*\d*\s*:?\s*$/i,
-    /^\[.*\]$/,
-    /^<.*>$/,
-  ];
-  return patterns.some((p) => p.test(trimmed));
-}
 
 /** Create a styled element */
 function createElement(
@@ -27,46 +24,11 @@ function createElement(
   return el;
 }
 
-/** Group lines into sections */
-function groupIntoSections(lines: Line[]): Line[][] {
-  const sections: Line[][] = [];
-  let current: Line[] = [];
+/** Build a chord line with proper spacing from Chord array */
+function buildChordLine(chords: Chord[], transpositionOffset: number): string {
+  if (chords.length === 0) return "";
 
-  for (const line of lines) {
-    const isEmpty =
-      !line.lyrics.trim() && line.chords.length === 0 && !line.barNotation;
-    const isHeader = isSectionHeader(line.lyrics);
-
-    if (isEmpty) {
-      if (current.length > 0) {
-        sections.push(current);
-        current = [];
-      }
-      continue;
-    }
-
-    if (isHeader && current.length > 0) {
-      sections.push(current);
-      current = [];
-    }
-
-    current.push(line);
-  }
-
-  if (current.length > 0) {
-    sections.push(current);
-  }
-
-  return sections;
-}
-
-/** Build a chord line with proper spacing */
-function buildChordLine(line: Line, transpositionOffset: number): string {
-  if (line.chords.length === 0) return "";
-
-  const sortedChords = [...line.chords].sort(
-    (a, b) => a.charIndex - b.charIndex,
-  );
+  const sortedChords = [...chords].sort((a, b) => a.charIndex - b.charIndex);
 
   let result = "";
   let lastEnd = 0;
@@ -89,10 +51,97 @@ function buildChordLine(line: Line, transpositionOffset: number): string {
   return result;
 }
 
-/** Render a section */
-function renderSection(
-  sectionLines: Line[],
-  song: AnySong,
+/** Render a chord/lyrics block */
+function renderChordLyricsBlock(
+  block: ChordLyricsBlock,
+  song: Song,
+  options: ExportOptions,
+): HTMLElement {
+  const container = createElement("div", {});
+
+  const hasChords = block.chords.length > 0;
+  const showChords = hasChords && options.includeChords;
+
+  if (showChords) {
+    const chordText = buildChordLine(block.chords, song.transpositionOffset);
+    const chordDiv = createElement(
+      "div",
+      {
+        fontSize: "14px",
+        fontWeight: "bold",
+        color: "#2563eb",
+        whiteSpace: "pre",
+        height: "18px",
+      },
+      chordText || "\u00A0",
+    );
+    container.appendChild(chordDiv);
+  }
+
+  const lyricsDiv = createElement(
+    "div",
+    {
+      fontSize: "13px",
+      whiteSpace: "pre-wrap",
+      color: "#1f2937",
+      lineHeight: "1.3",
+    },
+    block.lyrics || "\u00A0",
+  );
+  container.appendChild(lyricsDiv);
+
+  return container;
+}
+
+/** Render a bar notation block */
+function renderBarNotationBlock(
+  block: BarNotationBlock,
+  song: Song,
+  options: ExportOptions,
+): HTMLElement | null {
+  if (!options.includeChords) {
+    return null; // Skip bar notation when chords are off
+  }
+
+  const { bars, repeatStart, repeatEnd } = block.barNotation;
+  const transposedBars = bars.map((chord) =>
+    chord && song.transpositionOffset !== 0
+      ? transposeChord(chord, song.transpositionOffset).symbol
+      : chord,
+  );
+  const barStr = `${repeatStart ? "||:" : ""}${transposedBars.join(" |")} ${repeatEnd ? ":||" : ""}`;
+
+  return createElement(
+    "div",
+    {
+      fontSize: "14px",
+      fontWeight: "bold",
+      color: "#2563eb",
+      margin: "4px 0",
+    },
+    barStr,
+  );
+}
+
+/** Render a free text block */
+function renderFreeTextBlock(block: FreeTextBlock): HTMLElement {
+  return createElement(
+    "div",
+    {
+      fontSize: "13px",
+      whiteSpace: "pre-wrap",
+      color: "#1f2937",
+      lineHeight: "1.3",
+      fontStyle: "italic",
+    },
+    block.text,
+  );
+}
+
+/** Render a section block with its children */
+function renderSectionBlock(
+  block: SectionBlock,
+  song: Song,
   options: ExportOptions,
 ): HTMLElement {
   const section = createElement("div", {
@@ -100,85 +149,75 @@ function renderSection(
     breakInside: "avoid",
   });
 
-  for (const line of sectionLines) {
-    // Handle bar notation - skip when chords are hidden
-    if (line.barNotation) {
-      if (!options.includeChords) {
-        continue; // Skip bar notation lines when chords are off
-      }
-      const { bars, repeatStart, repeatEnd } = line.barNotation;
-      const transposedBars = bars.map((chord) =>
-        chord && song.transpositionOffset !== 0
-          ? transposeChord(chord, song.transpositionOffset).symbol
-          : chord,
-      );
-      const barStr = `${repeatStart ? "||:" : ""}${transposedBars.join(" |")} ${repeatEnd ? ":||" : ""}`;
-      const barDiv = createElement(
-        "div",
-        {
-          fontSize: "14px",
-          fontWeight: "bold",
-          color: "#2563eb",
-          margin: "4px 0",
-        },
-        barStr,
-      );
-      section.appendChild(barDiv);
-      continue;
+  // Section header
+  const headerDiv = createElement(
+    "div",
+    {
+      fontSize: "14px",
+      fontWeight: "bold",
+      textTransform: "uppercase",
+      margin: "12px 0 4px 0",
+      color: "#1f2937",
+    },
+    block.label,
+  );
+  section.appendChild(headerDiv);
+
+  // Render children
+  for (const child of block.children) {
+    const rendered = renderBlock(child, song, options);
+    if (rendered) {
+      section.appendChild(rendered);
     }
-
-    // Section header
-    if (isSectionHeader(line.lyrics)) {
-      const headerDiv = createElement(
-        "div",
-        {
-          fontSize: "14px",
-          fontWeight: "bold",
-          textTransform: "uppercase",
-          margin: "12px 0 4px 0",
-          color: "#1f2937",
-        },
-        line.lyrics,
-      );
-      section.appendChild(headerDiv);
-      continue;
-    }
-
-    // Only show chord line when chords are enabled - collapse spacing when hidden
-    const hasChords = line.chords.length > 0;
-    const showChords = hasChords && options.includeChords;
-
-    if (showChords) {
-      const chordText = buildChordLine(line, song.transpositionOffset);
-      const chordDiv = createElement(
-        "div",
-        {
-          fontSize: "14px",
-          fontWeight: "bold",
-          color: "#2563eb",
-          whiteSpace: "pre",
-          height: "18px",
-        },
-        chordText || "\u00A0",
-      );
-      section.appendChild(chordDiv);
-    }
-
-    // Lyrics line
-    const lyricsDiv = createElement(
-      "div",
-      {
-        fontSize: "13px",
-        whiteSpace: "pre-wrap",
-        color: "#1f2937",
-        lineHeight: "1.3",
-      },
-      line.lyrics || "\u00A0",
-    );
-    section.appendChild(lyricsDiv);
   }
 
   return section;
+}
+
+/** Render any block type */
+function renderBlock(
+  block: Block,
+  song: Song,
+  options: ExportOptions,
+): HTMLElement | null {
+  switch (block.type) {
+    case "section":
+      return renderSectionBlock(block, song, options);
+    case "chordLyricsLine":
+      return renderChordLyricsBlock(block, song, options);
+    case "barNotationLine":
+      return renderBarNotationBlock(block, song, options);
+    case "freeText":
+      return renderFreeTextBlock(block);
+    default:
+      return null;
+  }
+}
+
+/** Extract top-level sections from blocks for column layout */
+function extractSections(blocks: Block[]): Block[][] {
+  const sections: Block[][] = [];
+  let currentGroup: Block[] = [];
+
+  for (const block of blocks) {
+    if (block.type === "section") {
+      // Each SectionBlock is its own section
+      if (currentGroup.length > 0) {
+        sections.push(currentGroup);
+        currentGroup = [];
+      }
+      sections.push([block]);
+    } else {
+      // Non-section blocks get grouped together
+      currentGroup.push(block);
+    }
+  }
+
+  if (currentGroup.length > 0) {
+    sections.push(currentGroup);
+  }
+
+  return sections;
 }
 
 /** Paper sizes in mm */
@@ -215,7 +254,7 @@ export function getPageDimensions(options: ExportOptions): {
  * Uses flexbox to push the footer to the bottom.
  */
 export function buildPDFContent(
-  song: AnySong,
+  song: Song,
   options: ExportOptions,
   logoUrl?: string,
 ): HTMLElement {
@@ -355,8 +394,8 @@ export function buildPDFContent(
         },
   );
 
-  // Group lines into sections (use empty array for V2 songs which have blocks instead)
-  const sections = groupIntoSections(song.lines || []);
+  // Extract sections from blocks for column layout
+  const sections = extractSections(song.blocks);
 
   // Split into columns if needed
   const midpoint = Math.ceil(sections.length / 2);
@@ -366,16 +405,26 @@ export function buildPDFContent(
 
   // Render left column
   const leftCol = createElement("div", {});
-  for (const section of leftSections) {
-    leftCol.appendChild(renderSection(section, song, options));
+  for (const sectionBlocks of leftSections) {
+    for (const block of sectionBlocks) {
+      const rendered = renderBlock(block, song, options);
+      if (rendered) {
+        leftCol.appendChild(rendered);
+      }
+    }
   }
   contentGrid.appendChild(leftCol);
 
   // Render right column
   if (columnCount === 2) {
     const rightCol = createElement("div", {});
-    for (const section of rightSections) {
-      rightCol.appendChild(renderSection(section, song, options));
+    for (const sectionBlocks of rightSections) {
+      for (const block of sectionBlocks) {
+        const rendered = renderBlock(block, song, options);
+        if (rendered) {
+          rightCol.appendChild(rendered);
+        }
+      }
     }
     contentGrid.appendChild(rightCol);
   }

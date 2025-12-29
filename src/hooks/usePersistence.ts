@@ -1,7 +1,5 @@
 import { useCallback, useState, useEffect } from "react";
-import type { Song, SongV2, AnySong, SongMetadata } from "../types";
-import { isSongV2, needsMigration } from "../types/song";
-import { migrateV1ToV2 } from "../lib/migration";
+import type { Song, SongMetadata } from "../types";
 import { countBlocks, cloneBlocks } from "../lib/block-utils";
 import type { Playlist } from "../types/playlist";
 
@@ -9,7 +7,7 @@ const SONGS_STORAGE_KEY = "victors-helper-songs";
 const PLAYLISTS_STORAGE_KEY = "victors-helper-playlists";
 
 interface StoredSongs {
-  songs: AnySong[];
+  songs: Song[];
   lastAccessed?: string;
 }
 
@@ -19,7 +17,7 @@ interface StoredPlaylists {
 }
 
 export function usePersistence() {
-  const [songs, setSongs] = useState<AnySong[]>([]);
+  const [songs, setSongs] = useState<Song[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -29,7 +27,11 @@ export function usePersistence() {
       const storedSongs = localStorage.getItem(SONGS_STORAGE_KEY);
       if (storedSongs) {
         const data: StoredSongs = JSON.parse(storedSongs);
-        setSongs(data.songs || []);
+        // Filter to only block-based songs (version: 2)
+        const validSongs = (data.songs || []).filter(
+          (s) => s.version === 2 && Array.isArray(s.blocks),
+        );
+        setSongs(validSongs);
       }
 
       const storedPlaylists = localStorage.getItem(PLAYLISTS_STORAGE_KEY);
@@ -45,7 +47,7 @@ export function usePersistence() {
   }, []);
 
   // Save songs to localStorage
-  const persistSongs = useCallback((songsToSave: AnySong[]) => {
+  const persistSongs = useCallback((songsToSave: Song[]) => {
     try {
       const data: StoredSongs = {
         songs: songsToSave,
@@ -77,60 +79,42 @@ export function usePersistence() {
   // Get song metadata for list display
   const getSongList = useCallback((): SongMetadata[] => {
     return songs
-      .map((song) => {
-        // Handle both V1 and V2 songs
-        const lineCount = isSongV2(song)
-          ? countBlocks(song.blocks)
-          : song.lines.length;
-
-        return {
-          id: song.id,
-          title: song.title,
-          songwriters: song.songwriters,
-          key: song.key,
-          tempo: song.tempo,
-          timeSignature: song.timeSignature,
-          createdAt: song.createdAt,
-          updatedAt: song.updatedAt,
-          lineCount,
-        };
-      })
+      .map((song) => ({
+        id: song.id,
+        title: song.title,
+        songwriters: song.songwriters,
+        key: song.key,
+        tempo: song.tempo,
+        timeSignature: song.timeSignature,
+        createdAt: song.createdAt,
+        updatedAt: song.updatedAt,
+        blockCount: countBlocks(song.blocks),
+      }))
       .sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
   }, [songs]);
 
-  // Load a specific song (auto-migrates V1 to V2)
+  // Load a specific song
   const loadSong = useCallback(
-    (id: string, autoMigrate: boolean = true): AnySong | null => {
+    (id: string): Song | null => {
       const song = songs.find((s) => s.id === id);
-      if (!song) return null;
-
-      // Auto-migrate V1 songs to V2 if requested
-      if (autoMigrate && needsMigration(song)) {
-        const migratedSong = migrateV1ToV2(song);
-        // Persist the migrated song
-        const updatedSongs = songs.map((s) => (s.id === id ? migratedSong : s));
-        persistSongs(updatedSongs);
-        return migratedSong;
-      }
-
-      return song;
+      return song || null;
     },
-    [songs, persistSongs],
+    [songs],
   );
 
-  // Save a song (add or update) - supports both V1 and V2
+  // Save a song (add or update)
   const saveSong = useCallback(
-    (song: AnySong): AnySong => {
-      const updatedSong = {
+    (song: Song): Song => {
+      const updatedSong: Song = {
         ...song,
         updatedAt: new Date().toISOString(),
       };
 
       const existingIndex = songs.findIndex((s) => s.id === song.id);
-      let newSongs: AnySong[];
+      let newSongs: Song[];
 
       if (existingIndex >= 0) {
         newSongs = [...songs];
@@ -162,46 +146,22 @@ export function usePersistence() {
     [songs, playlists, persistSongs, persistPlaylists],
   );
 
-  // Duplicate a song - supports both V1 and V2
+  // Duplicate a song
   const duplicateSong = useCallback(
-    (id: string): AnySong | null => {
+    (id: string): Song | null => {
       const original = songs.find((s) => s.id === id);
       if (!original) return null;
 
       const now = new Date().toISOString();
 
-      // Handle V2 songs
-      if (isSongV2(original)) {
-        const duplicated: SongV2 = {
-          ...original,
-          id: crypto.randomUUID(),
-          title: `${original.title || "Untitled"} (Copy)`,
-          createdAt: now,
-          updatedAt: now,
-          blocks: cloneBlocks(original.blocks),
-        };
-        persistSongs([...songs, duplicated]);
-        return duplicated;
-      }
-
-      // Handle V1 songs
       const duplicated: Song = {
         ...original,
         id: crypto.randomUUID(),
         title: `${original.title || "Untitled"} (Copy)`,
         createdAt: now,
         updatedAt: now,
-        // Deep copy lines to avoid reference issues
-        lines: original.lines.map((line) => ({
-          ...line,
-          id: crypto.randomUUID(),
-          chords: line.chords.map((chord) => ({
-            ...chord,
-            id: crypto.randomUUID(),
-          })),
-        })),
+        blocks: cloneBlocks(original.blocks),
       };
-
       persistSongs([...songs, duplicated]);
       return duplicated;
     },
@@ -271,7 +231,6 @@ export function usePersistence() {
         name: `${original.name} (Copy)`,
         createdAt: now,
         updatedAt: now,
-        // Copy the songIds array
         songIds: [...original.songIds],
       };
 
@@ -342,48 +301,26 @@ export function usePersistence() {
     [playlists, persistPlaylists],
   );
 
-  // Bulk duplicate songs - supports both V1 and V2
+  // Bulk duplicate songs
   const bulkDuplicateSongs = useCallback(
-    (ids: string[]): AnySong[] => {
-      const duplicated: AnySong[] = [];
+    (ids: string[]): Song[] => {
+      const duplicated: Song[] = [];
       const newSongs = [...songs];
       const now = new Date().toISOString();
 
       for (const id of ids) {
         const original = songs.find((s) => s.id === id);
         if (original) {
-          // Handle V2 songs
-          if (isSongV2(original)) {
-            const dup: SongV2 = {
-              ...original,
-              id: crypto.randomUUID(),
-              title: `${original.title || "Untitled"} (Copy)`,
-              createdAt: now,
-              updatedAt: now,
-              blocks: cloneBlocks(original.blocks),
-            };
-            newSongs.push(dup);
-            duplicated.push(dup);
-          } else {
-            // Handle V1 songs
-            const dup: Song = {
-              ...original,
-              id: crypto.randomUUID(),
-              title: `${original.title || "Untitled"} (Copy)`,
-              createdAt: now,
-              updatedAt: now,
-              lines: original.lines.map((line) => ({
-                ...line,
-                id: crypto.randomUUID(),
-                chords: line.chords.map((chord) => ({
-                  ...chord,
-                  id: crypto.randomUUID(),
-                })),
-              })),
-            };
-            newSongs.push(dup);
-            duplicated.push(dup);
-          }
+          const dup: Song = {
+            ...original,
+            id: crypto.randomUUID(),
+            title: `${original.title || "Untitled"} (Copy)`,
+            createdAt: now,
+            updatedAt: now,
+            blocks: cloneBlocks(original.blocks),
+          };
+          newSongs.push(dup);
+          duplicated.push(dup);
         }
       }
 
@@ -481,9 +418,9 @@ export function usePersistence() {
 
   // Get songs for given playlist IDs (for export)
   const getSongsForPlaylists = useCallback(
-    (playlistIds: string[]): AnySong[] => {
+    (playlistIds: string[]): Song[] => {
       const seen = new Set<string>();
-      const result: AnySong[] = [];
+      const result: Song[] = [];
 
       for (const playlistId of playlistIds) {
         const playlist = playlists.find((p) => p.id === playlistId);
@@ -520,25 +457,25 @@ export function usePersistence() {
     URL.revokeObjectURL(url);
   }, []);
 
-  // Import song from file - supports both V1 and V2
+  // Import song from file
   const importFromFile = useCallback(
-    async (file: File): Promise<AnySong> => {
+    async (file: File): Promise<Song> => {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
           try {
-            const song = JSON.parse(e.target?.result as string) as AnySong;
+            const song = JSON.parse(e.target?.result as string) as Song;
 
-            // Validate basic structure for V2
-            if (isSongV2(song)) {
-              if (!song.id || !song.blocks || !Array.isArray(song.blocks)) {
-                throw new Error("Invalid V2 song file format");
-              }
-            } else {
-              // Validate V1 structure
-              if (!song.id || !song.lines || !Array.isArray(song.lines)) {
-                throw new Error("Invalid song file format");
-              }
+            // Validate block-based structure
+            if (
+              !song.id ||
+              song.version !== 2 ||
+              !song.blocks ||
+              !Array.isArray(song.blocks)
+            ) {
+              throw new Error(
+                "Invalid song file format. Expected block-based song structure.",
+              );
             }
 
             const saved = saveSong(song);

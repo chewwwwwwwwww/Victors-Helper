@@ -5,23 +5,23 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import type {
-  SongV2,
+  Song,
   ChordReference,
   FontMetrics,
   EditableSongMetadata,
   UUID,
   BarNotation,
 } from "../types";
-import { DEFAULT_FONT_METRICS } from "../lib/layout-engine";
+import { DEFAULT_FONT_METRICS, pixelXToCharIndex } from "../lib/layout-engine";
 import { MetadataPanel } from "./MetadataPanel";
 import { BlockList, type BlockRenderContext } from "./blocks/BlockRenderer";
 import type { AccidentalPreference } from "../types/chord-theory";
 import type { LyricEditMode } from "./LyricEditor";
 import { useSong } from "../contexts/SongContext";
-import { getAllBlockIds } from "../lib/block-utils";
+import { getAllBlockIds, findBlock } from "../lib/block-utils";
 
 interface BlockBasedChartViewerProps {
-  song: SongV2;
+  song: Song;
   fontMetrics?: FontMetrics;
   selectedChords: ChordReference[];
   chordsVisible: boolean;
@@ -83,6 +83,15 @@ export function BlockBasedChartViewer({
   // Editing state (local only)
   const [editingBlockId, setEditingBlockId] = useState<UUID | null>(null);
 
+  // Chord drag state
+  const [chordDragState, setChordDragState] = useState<{
+    chordRef: ChordReference;
+    lineId: string;
+    startX: number;
+    currentCharIndex: number;
+    originalCharIndex: number;
+  } | null>(null);
+
   // Block operation handlers for context
   const handleBlockSelect = useCallback(
     (blockId: UUID) => {
@@ -136,6 +145,68 @@ export function BlockBasedChartViewer({
     [updateBlock],
   );
 
+  // Chord drag handlers
+  const handleChordDragStart = useCallback(
+    (ref: ChordReference, startX: number) => {
+      // Find the block to get the chord's current position
+      const block = findBlock(song.blocks, ref.lineId as UUID);
+      if (!block || block.type !== "chordLyricsLine") return;
+
+      const chord = block.chords.find((c) => c.id === ref.chordId);
+      if (!chord) return;
+
+      setChordDragState({
+        chordRef: ref,
+        lineId: ref.lineId,
+        startX,
+        currentCharIndex: chord.charIndex,
+        originalCharIndex: chord.charIndex,
+      });
+    },
+    [song.blocks],
+  );
+
+  const handleChordDragMove = useCallback(
+    (clientX: number) => {
+      if (!chordDragState || !containerRef.current) return;
+
+      // Find the block to get lyrics length
+      const block = findBlock(song.blocks, chordDragState.lineId as UUID);
+      if (!block || block.type !== "chordLyricsLine") return;
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const relativeX = clientX - rect.left;
+      const newCharIndex = pixelXToCharIndex(
+        relativeX,
+        fontMetrics.charWidth,
+        block.lyrics.length,
+      );
+
+      setChordDragState((prev) =>
+        prev ? { ...prev, currentCharIndex: newCharIndex } : null,
+      );
+    },
+    [chordDragState, song.blocks, fontMetrics.charWidth],
+  );
+
+  const handleChordDragEnd = useCallback(() => {
+    if (!chordDragState) return;
+
+    if (chordDragState.currentCharIndex !== chordDragState.originalCharIndex) {
+      onChordMove(chordDragState.chordRef, chordDragState.currentCharIndex);
+    }
+
+    setChordDragState(null);
+  }, [chordDragState, onChordMove]);
+
+  const getDragPreviewCharIndex = useCallback(
+    (lineId: string): number | null => {
+      if (!chordDragState || chordDragState.lineId !== lineId) return null;
+      return chordDragState.currentCharIndex;
+    },
+    [chordDragState],
+  );
+
   // Get flat list of block IDs for SortableContext
   const blockIds = useMemo(() => {
     return getAllBlockIds(song.blocks);
@@ -160,6 +231,12 @@ export function BlockBasedChartViewer({
       onChordSelect,
       onChordDoubleClick,
       onChordMove,
+
+      // Chord drag operations
+      onChordDragStart: handleChordDragStart,
+      onChordDragMove: handleChordDragMove,
+      onChordDragEnd: handleChordDragEnd,
+      getDragPreviewCharIndex,
 
       // Lyric operations
       onLyricEditModeChange,
@@ -188,6 +265,10 @@ export function BlockBasedChartViewer({
       onChordSelect,
       onChordDoubleClick,
       onChordMove,
+      handleChordDragStart,
+      handleChordDragMove,
+      handleChordDragEnd,
+      getDragPreviewCharIndex,
       onLyricEditModeChange,
       handleLyricCommitV2,
       handleLyricCancelV2,

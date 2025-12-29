@@ -80,7 +80,7 @@ export function SongList({
                       {song.title || "Untitled Song"}
                     </div>
                     <div className="text-sm text-gray-500 dark:text-gray-400">
-                      {song.lineCount} lines • {formatDate(song.updatedAt)}
+                      {song.blockCount} blocks • {formatDate(song.updatedAt)}
                     </div>
                   </div>
 

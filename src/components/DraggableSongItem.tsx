@@ -149,9 +149,9 @@ export function DraggableSongItem({
                 {song.key}
               </span>
             )}
-            {song.artist && (
+            {song.songwriters && song.songwriters.length > 0 && (
               <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {song.artist}
+                {song.songwriters.join(", ")}
               </span>
             )}
           </div>

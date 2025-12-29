@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import JSZip from "jszip";
-import type { ExportOptions, AnySong } from "../types";
+import type { ExportOptions, Song } from "../types";
 import {
   buildPDFContent,
   getPageDimensions,
@@ -25,7 +25,7 @@ export function usePDFExport() {
       _chartElement: HTMLElement | null,
       options: ExportOptions,
       title?: string,
-      song?: AnySong,
+      song?: Song,
       logoUrl?: string,
     ): Promise<void> => {
       if (!song) {
@@ -105,7 +105,7 @@ export function usePDFExport() {
   // Export multiple songs to a single combined PDF
   const exportMultipleToPDF = useCallback(
     async (
-      songs: AnySong[],
+      songs: Song[],
       options: ExportOptions,
       logoUrl?: string,
       filename?: string,
@@ -183,7 +183,7 @@ export function usePDFExport() {
   // Export multiple songs as separate PDFs in a zip file
   const exportSeparatePDFs = useCallback(
     async (
-      songs: AnySong[],
+      songs: Song[],
       options: ExportOptions,
       logoUrl?: string,
       zipFilename?: string,

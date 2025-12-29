@@ -1,5 +1,4 @@
-import type { Chord, Line } from "../types";
-import { v4 as uuidv4 } from "uuid";
+import type { Chord } from "../types";
 
 /**
  * Clamp a character index to valid range for a lyrics string.
@@ -54,97 +53,6 @@ export function adjustChordsForEdit(
 }
 
 /**
- * Insert a new chord at a specific character index.
- */
-export function insertChord(
-  line: Line,
-  chordSymbol: string,
-  charIndex: number,
-): Line {
-  const newChord: Chord = {
-    id: uuidv4(),
-    chord: chordSymbol,
-    charIndex: clampCharIndex(charIndex, line.lyrics.length),
-  };
-
-  return {
-    ...line,
-    chords: [...line.chords, newChord].sort(
-      (a, b) => a.charIndex - b.charIndex,
-    ),
-  };
-}
-
-/**
- * Move a chord to a new character index.
- */
-export function moveChord(
-  line: Line,
-  chordId: string,
-  newCharIndex: number,
-): Line {
-  return {
-    ...line,
-    chords: line.chords
-      .map((chord) =>
-        chord.id === chordId
-          ? {
-              ...chord,
-              charIndex: clampCharIndex(newCharIndex, line.lyrics.length),
-            }
-          : chord,
-      )
-      .sort((a, b) => a.charIndex - b.charIndex),
-  };
-}
-
-/**
- * Update a chord's symbol.
- */
-export function updateChord(
-  line: Line,
-  chordId: string,
-  newSymbol: string,
-): Line {
-  return {
-    ...line,
-    chords: line.chords.map((chord) =>
-      chord.id === chordId ? { ...chord, chord: newSymbol } : chord,
-    ),
-  };
-}
-
-/**
- * Delete a chord from a line.
- */
-export function deleteChord(line: Line, chordId: string): Line {
-  return {
-    ...line,
-    chords: line.chords.filter((chord) => chord.id !== chordId),
-  };
-}
-
-/**
- * Update lyrics and adjust chord positions accordingly.
- */
-export function updateLyrics(line: Line, newLyrics: string): Line {
-  
-  const newLength = newLyrics.length;
-
-  // Simple approach: clamp all chords to new length
-  const adjustedChords = line.chords.map((chord) => ({
-    ...chord,
-    charIndex: clampCharIndex(chord.charIndex, newLength),
-  }));
-
-  return {
-    ...line,
-    lyrics: newLyrics,
-    chords: adjustedChords,
-  };
-}
-
-/**
  * Convert pixel position to character index.
  */
 export function pixelToCharIndex(
@@ -168,16 +76,6 @@ export function charIndexToPixel(charIndex: number, charWidth: number): number {
  */
 export function getSortedChords(chords: Chord[]): Chord[] {
   return [...chords].sort((a, b) => a.charIndex - b.charIndex);
-}
-
-/**
- * Find a chord by its ID in a line.
- */
-export function findChordInLine(
-  line: Line,
-  chordId: string,
-): Chord | undefined {
-  return line.chords.find((chord) => chord.id === chordId);
 }
 
 /**

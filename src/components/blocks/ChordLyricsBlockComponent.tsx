@@ -164,11 +164,22 @@ export function ChordLyricsBlockComponent({
                 wasNudged={false}
                 onSelect={context.onChordSelect}
                 onDoubleClick={context.onChordDoubleClick}
-                onDragStart={(_ref, _startX) => {}}
-                onDragMove={(_clientX) => {}}
-                onDragEnd={() => {}}
+                onDragStart={context.onChordDragStart}
+                onDragMove={context.onChordDragMove}
+                onDragEnd={context.onChordDragEnd}
               />
             ),
+          )}
+
+          {/* Drag preview caret */}
+          {context.getDragPreviewCharIndex(block.id) !== null && (
+            <div
+              className="absolute top-0 bottom-0 w-0.5 pointer-events-none z-40"
+              style={{
+                left: `${context.getDragPreviewCharIndex(block.id)! * context.fontMetrics.charWidth}px`,
+                backgroundColor: "#3b82f6",
+              }}
+            />
           )}
         </div>
       )}

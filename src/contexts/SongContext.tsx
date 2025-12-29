@@ -8,31 +8,18 @@ import {
 import type { ReactNode } from "react";
 import type {
   Song,
-  SongV2,
-  AnySong,
   ChordReference,
-  Line,
   BarNotation,
   EditableSongMetadata,
   Block,
   BlockType,
   UUID,
+  Chord,
+  ContentBlock,
+  ChordLyricsBlock,
 } from "../types";
 import type { ClipboardState } from "../types/clipboard";
 import type { AccidentalPreference } from "../types/chord-theory";
-import { v4 as uuidv4 } from "uuid";
-import {
-  insertChord as insertChordInLine,
-  moveChord as moveChordInLine,
-  updateChord as updateChordInLine,
-  deleteChord as deleteChordInLine,
-  updateLyrics as updateLyricsInLine,
-} from "../lib/char-index-utils";
-import { createEmptySong, createSampleSong } from "../lib/chart-parser";
-import {
-  updateChordsOnLyricEdit,
-  updateChordsLyricsOnly,
-} from "../lib/chord-attachment";
 import {
   insertBlock as insertBlockInTree,
   insertBlockBefore as insertBlockBeforeInTree,
@@ -44,40 +31,30 @@ import {
   createDefaultBlock,
   findBlock,
 } from "../lib/block-utils";
-import { isSongV2 } from "../types/song";
-import { migrateV1ToV2, createEmptySongV2 } from "../lib/migration";
+import { createEmptySong } from "../lib/migration";
 import type { LyricEditMode } from "../components/LyricEditor";
+import {
+  updateChordsOnLyricEdit,
+  updateChordsLyricsOnly,
+} from "../lib/chord-attachment";
 
 interface SongContextValue {
-  // Current document (supports both V1 and V2)
+  // Current document
   song: Song | null;
-  songV2: SongV2 | null;
   isLoading: boolean;
   isDirty: boolean;
 
   // Load/create
-  loadSong: (song: AnySong) => void;
+  loadSong: (song: Song) => void;
   createNewSong: (title?: string) => void;
-  loadSampleSong: () => void;
-  createNewSongV2: (title?: string) => void;
 
-  // Chord operations (V1 - for backward compatibility)
-  insertChord: (lineId: string, chordSymbol: string, charIndex: number) => void;
-  updateChord: (lineId: string, chordId: string, newSymbol: string) => void;
+  // Chord operations
+  insertChord: (blockId: UUID, chordSymbol: string, charIndex: number) => void;
+  updateChord: (blockId: UUID, chordId: UUID, newSymbol: string) => void;
   moveChord: (ref: ChordReference, newCharIndex: number) => void;
-  deleteChord: (lineId: string, chordId: string) => void;
+  deleteChord: (blockId: UUID, chordId: UUID) => void;
 
-  // Line operations (V1 - for backward compatibility)
-  updateLine: (lineId: string, lyrics: string) => void;
-  updateLineWithMode: (
-    lineId: string,
-    lyrics: string,
-    mode: LyricEditMode,
-  ) => void;
-  insertLine: (afterLineId: string | null) => void;
-  deleteLine: (lineId: string) => void;
-
-  // Block operations (V2)
+  // Block operations
   insertBlock: (
     blockType: BlockType,
     afterBlockId: UUID | null,
@@ -106,6 +83,11 @@ interface SongContextValue {
   deleteBlock: (blockId: UUID) => void;
   updateBlock: (blockId: UUID, updates: Partial<Block>) => void;
   duplicateBlock: (blockId: UUID) => void;
+  updateBlockLyrics: (
+    blockId: UUID,
+    lyrics: string,
+    mode: LyricEditMode,
+  ) => void;
 
   // Clipboard operations
   clipboard: ClipboardState | null;
@@ -119,7 +101,7 @@ interface SongContextValue {
   transpose: (semitones: number) => void;
 
   // Bar notation
-  setBarNotation: (lineId: string, barNotation: BarNotation | null) => void;
+  setBarNotation: (blockId: UUID, barNotation: BarNotation | null) => void;
 
   // Column layout
   setSectionColumn: (
@@ -151,31 +133,29 @@ interface SongProviderProps {
 }
 
 export function SongProvider({ children }: SongProviderProps) {
-  // Support both V1 (song) and V2 (songV2) - V2 is primary going forward
   const [song, setSong] = useState<Song | null>(null);
-  const [songV2, setSongV2] = useState<SongV2 | null>(null);
   const [isLoading] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [clipboard, setClipboard] = useState<ClipboardState | null>(null);
   const [accidentalPreference, setAccidentalPreference] =
     useState<AccidentalPreference>("auto");
 
-  // History for undo/redo (stores V2 songs)
-  const pastRef = useRef<SongV2[]>([]);
-  const futureRef = useRef<SongV2[]>([]);
+  // History for undo/redo
+  const pastRef = useRef<Song[]>([]);
+  const futureRef = useRef<Song[]>([]);
 
   // Push current state to history
   const pushHistory = useCallback(() => {
-    if (songV2) {
-      pastRef.current = [...pastRef.current.slice(-MAX_HISTORY + 1), songV2];
+    if (song) {
+      pastRef.current = [...pastRef.current.slice(-MAX_HISTORY + 1), song];
       futureRef.current = [];
     }
-  }, [songV2]);
+  }, [song]);
 
-  // Update V2 song with history tracking
-  const updateSongV2 = useCallback(
-    (updater: (s: SongV2) => SongV2) => {
-      setSongV2((prev) => {
+  // Update song with history tracking
+  const updateSong = useCallback(
+    (updater: (s: Song) => Song) => {
+      setSong((prev) => {
         if (!prev) return prev;
         pushHistory();
         const updated = updater(prev);
@@ -189,49 +169,18 @@ export function SongProvider({ children }: SongProviderProps) {
     [pushHistory],
   );
 
-  // Legacy: Update V1 song with history tracking (kept for backward compatibility)
-  const updateSong = useCallback((updater: (s: Song) => Song) => {
-    setSong((prev) => {
-      if (!prev) return prev;
-      const updated = updater(prev);
-      setIsDirty(true);
-      return {
-        ...updated,
-        updatedAt: new Date().toISOString(),
-      };
-    });
-  }, []);
-
-  // Load a song (auto-migrates V1 to V2)
-  const loadSong = useCallback((newSong: AnySong) => {
+  // Load a song
+  const loadSong = useCallback((newSong: Song) => {
     pastRef.current = [];
     futureRef.current = [];
-
-    if (isSongV2(newSong)) {
-      setSongV2(newSong);
-      setSong(null); // Clear V1 state
-    } else {
-      // Migrate V1 to V2
-      const migratedSong = migrateV1ToV2(newSong);
-      setSongV2(migratedSong);
-      setSong(newSong); // Keep V1 for backward compatibility
-    }
+    setSong(newSong);
     setIsDirty(false);
   }, []);
 
-  // Create new V1 song (legacy)
-  const createNewSong = useCallback(
+  // Create new song
+  const createNewSongFn = useCallback(
     (title?: string) => {
-      const newSong = createEmptySong(title);
-      loadSong(newSong);
-    },
-    [loadSong],
-  );
-
-  // Create new V2 song (preferred)
-  const createNewSongV2 = useCallback(
-    (title?: string) => {
-      const newSong = createEmptySongV2();
+      const newSong = createEmptySong();
       if (title) {
         newSong.title = title;
       }
@@ -240,39 +189,98 @@ export function SongProvider({ children }: SongProviderProps) {
     [loadSong],
   );
 
-  // Load sample song
-  const loadSampleSong = useCallback(() => {
-    loadSong(createSampleSong());
-  }, [loadSong]);
+  // Helper to update chords in blocks
+  const updateChordInBlocks = useCallback(
+    (
+      blocks: Block[],
+      blockId: UUID,
+      chordId: UUID,
+      updater: (chord: Chord) => Chord,
+    ): Block[] => {
+      return blocks.map((block) => {
+        if (block.type === "chordLyricsLine" && block.id === blockId) {
+          return {
+            ...block,
+            chords: block.chords.map((chord) =>
+              chord.id === chordId ? updater(chord) : chord,
+            ),
+          };
+        }
+        if (block.type === "section") {
+          return {
+            ...block,
+            children: updateChordInBlocks(
+              block.children,
+              blockId,
+              chordId,
+              updater,
+            ) as ContentBlock[],
+          };
+        }
+        return block;
+      });
+    },
+    [],
+  );
+
+  // Helper to add chord to a block
+  const addChordToBlocks = useCallback(
+    (blocks: Block[], blockId: UUID, chord: Chord): Block[] => {
+      return blocks.map((block) => {
+        if (block.type === "chordLyricsLine" && block.id === blockId) {
+          // Insert chord in sorted order by charIndex
+          const newChords = [...block.chords, chord].sort(
+            (a, b) => a.charIndex - b.charIndex,
+          );
+          return {
+            ...block,
+            chords: newChords,
+          };
+        }
+        if (block.type === "section") {
+          return {
+            ...block,
+            children: addChordToBlocks(
+              block.children,
+              blockId,
+              chord,
+            ) as ContentBlock[],
+          };
+        }
+        return block;
+      });
+    },
+    [],
+  );
 
   // Insert chord
   const insertChord = useCallback(
-    (lineId: string, chordSymbol: string, charIndex: number) => {
+    (blockId: UUID, chordSymbol: string, charIndex: number) => {
+      const newChord: Chord = {
+        id: crypto.randomUUID(),
+        chord: chordSymbol,
+        charIndex,
+      };
       updateSong((s) => ({
         ...s,
-        lines: s.lines.map((line) =>
-          line.id === lineId
-            ? insertChordInLine(line, chordSymbol, charIndex)
-            : line,
-        ),
+        blocks: addChordToBlocks(s.blocks, blockId, newChord),
       }));
     },
-    [updateSong],
+    [updateSong, addChordToBlocks],
   );
 
   // Update chord symbol
   const updateChord = useCallback(
-    (lineId: string, chordId: string, newSymbol: string) => {
+    (blockId: UUID, chordId: UUID, newSymbol: string) => {
       updateSong((s) => ({
         ...s,
-        lines: s.lines.map((line) =>
-          line.id === lineId
-            ? updateChordInLine(line, chordId, newSymbol)
-            : line,
-        ),
+        blocks: updateChordInBlocks(s.blocks, blockId, chordId, (chord) => ({
+          ...chord,
+          chord: newSymbol,
+        })),
       }));
     },
-    [updateSong],
+    [updateSong, updateChordInBlocks],
   );
 
   // Move chord
@@ -280,104 +288,116 @@ export function SongProvider({ children }: SongProviderProps) {
     (ref: ChordReference, newCharIndex: number) => {
       updateSong((s) => ({
         ...s,
-        lines: s.lines.map((line) =>
-          line.id === ref.lineId
-            ? moveChordInLine(line, ref.chordId, newCharIndex)
-            : line,
+        blocks: updateChordInBlocks(
+          s.blocks,
+          ref.lineId as UUID,
+          ref.chordId as UUID,
+          (chord) => ({
+            ...chord,
+            charIndex: newCharIndex,
+          }),
         ),
       }));
     },
-    [updateSong],
+    [updateSong, updateChordInBlocks],
+  );
+
+  // Helper to delete chord from blocks
+  const deleteChordFromBlocks = useCallback(
+    (blocks: Block[], blockId: UUID, chordId: UUID): Block[] => {
+      return blocks.map((block) => {
+        if (block.type === "chordLyricsLine" && block.id === blockId) {
+          return {
+            ...block,
+            chords: block.chords.filter((chord) => chord.id !== chordId),
+          };
+        }
+        if (block.type === "section") {
+          return {
+            ...block,
+            children: deleteChordFromBlocks(
+              block.children,
+              blockId,
+              chordId,
+            ) as ContentBlock[],
+          };
+        }
+        return block;
+      });
+    },
+    [],
   );
 
   // Delete chord
   const deleteChord = useCallback(
-    (lineId: string, chordId: string) => {
+    (blockId: UUID, chordId: UUID) => {
       updateSong((s) => ({
         ...s,
-        lines: s.lines.map((line) =>
-          line.id === lineId ? deleteChordInLine(line, chordId) : line,
-        ),
+        blocks: deleteChordFromBlocks(s.blocks, blockId, chordId),
       }));
     },
-    [updateSong],
+    [updateSong, deleteChordFromBlocks],
   );
 
-  // Update line lyrics (simple version, uses char-index shifting)
-  const updateLine = useCallback(
-    (lineId: string, lyrics: string) => {
-      updateSong((s) => ({
-        ...s,
-        lines: s.lines.map((line) =>
-          line.id === lineId ? updateLyricsInLine(line, lyrics) : line,
-        ),
-      }));
-    },
-    [updateSong],
-  );
-
-  // Update line lyrics with mode (attached/detached chord behavior)
-  const updateLineWithMode = useCallback(
-    (lineId: string, lyrics: string, mode: LyricEditMode) => {
-      updateSong((s) => ({
-        ...s,
-        lines: s.lines.map((line) => {
-          if (line.id !== lineId) return line;
+  // Helper to update lyrics in a block with chord adjustment
+  const updateBlockLyricsInTree = useCallback(
+    (
+      blocks: Block[],
+      blockId: UUID,
+      newLyrics: string,
+      mode: LyricEditMode,
+    ): Block[] => {
+      return blocks.map((block) => {
+        if (block.type === "chordLyricsLine" && block.id === blockId) {
+          const chordLyricsBlock = block as ChordLyricsBlock;
+          const oldLyrics = chordLyricsBlock.lyrics;
 
           // Apply appropriate chord adjustment based on mode
           const newChords =
             mode === "attached"
-              ? updateChordsOnLyricEdit(line.lyrics, lyrics, line.chords)
-              : updateChordsLyricsOnly(line.lyrics, lyrics, line.chords);
+              ? updateChordsOnLyricEdit(
+                  oldLyrics,
+                  newLyrics,
+                  chordLyricsBlock.chords,
+                )
+              : updateChordsLyricsOnly(
+                  oldLyrics,
+                  newLyrics,
+                  chordLyricsBlock.chords,
+                );
 
           return {
-            ...line,
-            lyrics,
+            ...block,
+            lyrics: newLyrics,
             chords: newChords,
           };
-        }),
+        }
+        if (block.type === "section") {
+          return {
+            ...block,
+            children: updateBlockLyricsInTree(
+              block.children,
+              blockId,
+              newLyrics,
+              mode,
+            ) as ContentBlock[],
+          };
+        }
+        return block;
+      });
+    },
+    [],
+  );
+
+  // Update block lyrics with mode
+  const updateBlockLyrics = useCallback(
+    (blockId: UUID, lyrics: string, mode: LyricEditMode) => {
+      updateSong((s) => ({
+        ...s,
+        blocks: updateBlockLyricsInTree(s.blocks, blockId, lyrics, mode),
       }));
     },
-    [updateSong],
-  );
-
-  // Insert new line
-  const insertLine = useCallback(
-    (afterLineId: string | null) => {
-      updateSong((s) => {
-        const newLine: Line = {
-          id: uuidv4(),
-          lyrics: "",
-          chords: [],
-        };
-
-        if (afterLineId === null) {
-          return { ...s, lines: [newLine, ...s.lines] };
-        }
-
-        const index = s.lines.findIndex((l) => l.id === afterLineId);
-        if (index === -1) {
-          return { ...s, lines: [...s.lines, newLine] };
-        }
-
-        const newLines = [...s.lines];
-        newLines.splice(index + 1, 0, newLine);
-        return { ...s, lines: newLines };
-      });
-    },
-    [updateSong],
-  );
-
-  // Delete line
-  const deleteLine = useCallback(
-    (lineId: string) => {
-      updateSong((s) => {
-        // Don't delete last line
-        if (s.lines.length <= 1) return s;
-        return { ...s, lines: s.lines.filter((l) => l.id !== lineId) };
-      });
-    },
-    [updateSong],
+    [updateSong, updateBlockLyricsInTree],
   );
 
   // Set title
@@ -396,21 +416,14 @@ export function SongProvider({ children }: SongProviderProps) {
     [updateSong],
   );
 
-  // Set bar notation for a line
+  // Set bar notation for a block
   const setBarNotation = useCallback(
-    (lineId: string, barNotation: BarNotation | null) => {
+    (blockId: UUID, barNotation: BarNotation | null) => {
       updateSong((s) => ({
         ...s,
-        lines: s.lines.map((line) =>
-          line.id === lineId
-            ? {
-                ...line,
-                barNotation: barNotation ?? undefined,
-                // Clear chords when switching to bar notation
-                chords: barNotation ? [] : line.chords,
-              }
-            : line,
-        ),
+        blocks: updateBlockInTree(s.blocks, blockId, {
+          barNotation: barNotation ?? undefined,
+        } as Partial<Block>),
       }));
     },
     [updateSong],
@@ -451,7 +464,7 @@ export function SongProvider({ children }: SongProviderProps) {
   );
 
   // ==========================================================================
-  // BLOCK OPERATIONS (V2)
+  // BLOCK OPERATIONS
   // ==========================================================================
 
   // Insert a new block by type
@@ -462,7 +475,7 @@ export function SongProvider({ children }: SongProviderProps) {
       parentSectionId: UUID | null,
     ) => {
       const newBlock = createDefaultBlock(blockType);
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: insertBlockInTree(
           s.blocks,
@@ -472,7 +485,7 @@ export function SongProvider({ children }: SongProviderProps) {
         ),
       }));
     },
-    [updateSongV2],
+    [updateSong],
   );
 
   // Insert a new block BEFORE a specific block
@@ -483,7 +496,7 @@ export function SongProvider({ children }: SongProviderProps) {
       parentSectionId: UUID | null,
     ) => {
       const newBlock = createDefaultBlock(blockType);
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: insertBlockBeforeInTree(
           s.blocks,
@@ -493,13 +506,13 @@ export function SongProvider({ children }: SongProviderProps) {
         ),
       }));
     },
-    [updateSongV2],
+    [updateSong],
   );
 
   // Insert an existing block instance
   const insertBlockInstance = useCallback(
     (block: Block, afterBlockId: UUID | null, parentSectionId: UUID | null) => {
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: insertBlockInTree(
           s.blocks,
@@ -509,24 +522,24 @@ export function SongProvider({ children }: SongProviderProps) {
         ),
       }));
     },
-    [updateSongV2],
+    [updateSong],
   );
 
   // Move a block to a new position
   const moveBlockOp = useCallback(
     (blockId: UUID, afterBlockId: UUID | null, newParentId: UUID | null) => {
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: moveBlockInTree(s.blocks, blockId, afterBlockId, newParentId),
       }));
     },
-    [updateSongV2],
+    [updateSong],
   );
 
   // Move a block to before a specific block
   const moveBlockBeforeOp = useCallback(
     (blockId: UUID, beforeBlockId: UUID, newParentId: UUID | null) => {
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: moveBlockBeforeInTree(
           s.blocks,
@@ -536,47 +549,47 @@ export function SongProvider({ children }: SongProviderProps) {
         ),
       }));
     },
-    [updateSongV2],
+    [updateSong],
   );
 
   // Delete a block
   const deleteBlock = useCallback(
     (blockId: UUID) => {
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: removeBlockFromTree(s.blocks, blockId),
       }));
     },
-    [updateSongV2],
+    [updateSong],
   );
 
   // Update a block
   const updateBlockOp = useCallback(
     (blockId: UUID, updates: Partial<Block>) => {
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: updateBlockInTree(s.blocks, blockId, updates),
       }));
     },
-    [updateSongV2],
+    [updateSong],
   );
 
   // Duplicate a block
   const duplicateBlock = useCallback(
     (blockId: UUID) => {
-      if (!songV2) return;
+      if (!song) return;
 
-      const block = findBlock(songV2.blocks, blockId);
+      const block = findBlock(song.blocks, blockId);
       if (!block) return;
 
       const clonedBlock = cloneBlock(block);
 
-      updateSongV2((s) => ({
+      updateSong((s) => ({
         ...s,
         blocks: insertBlockInTree(s.blocks, clonedBlock, blockId, null),
       }));
     },
-    [songV2, updateSongV2],
+    [song, updateSong],
   );
 
   // ==========================================================================
@@ -586,9 +599,9 @@ export function SongProvider({ children }: SongProviderProps) {
   // Copy a block to clipboard
   const copyBlock = useCallback(
     (blockId: UUID) => {
-      if (!songV2) return;
+      if (!song) return;
 
-      const block = findBlock(songV2.blocks, blockId);
+      const block = findBlock(song.blocks, blockId);
       if (!block) return;
 
       // Clone the block so clipboard is independent of original
@@ -596,11 +609,11 @@ export function SongProvider({ children }: SongProviderProps) {
 
       setClipboard({
         blocks: [clonedBlock],
-        sourceSongId: songV2.id,
+        sourceSongId: song.id,
         copiedAt: new Date().toISOString(),
       });
     },
-    [songV2],
+    [song],
   );
 
   // Paste block(s) from clipboard
@@ -611,7 +624,7 @@ export function SongProvider({ children }: SongProviderProps) {
       // Clone blocks again for paste (so multiple pastes create unique IDs)
       const blocksToPaste = clipboard.blocks.map((b) => cloneBlock(b));
 
-      updateSongV2((s) => {
+      updateSong((s) => {
         let newBlocks = s.blocks;
         let lastBlockId = afterBlockId;
 
@@ -629,7 +642,7 @@ export function SongProvider({ children }: SongProviderProps) {
         return { ...s, blocks: newBlocks };
       });
     },
-    [clipboard, updateSongV2],
+    [clipboard, updateSong],
   );
 
   // Clear clipboard
@@ -648,61 +661,49 @@ export function SongProvider({ children }: SongProviderProps) {
     [updateSong],
   );
 
-  // Undo (works with V2)
+  // Undo
   const undo = useCallback(() => {
-    if (pastRef.current.length === 0 || !songV2) return;
+    if (pastRef.current.length === 0 || !song) return;
 
-    futureRef.current = [
-      songV2,
-      ...futureRef.current.slice(0, MAX_HISTORY - 1),
-    ];
+    futureRef.current = [song, ...futureRef.current.slice(0, MAX_HISTORY - 1)];
     const previous = pastRef.current[pastRef.current.length - 1];
     pastRef.current = pastRef.current.slice(0, -1);
-    setSongV2(previous);
+    setSong(previous);
     setIsDirty(true);
-  }, [songV2]);
+  }, [song]);
 
-  // Redo (works with V2)
+  // Redo
   const redo = useCallback(() => {
-    if (futureRef.current.length === 0 || !songV2) return;
+    if (futureRef.current.length === 0 || !song) return;
 
-    pastRef.current = [...pastRef.current, songV2];
+    pastRef.current = [...pastRef.current, song];
     const next = futureRef.current[0];
     futureRef.current = futureRef.current.slice(1);
-    setSongV2(next);
+    setSong(next);
     setIsDirty(true);
-  }, [songV2]);
+  }, [song]);
 
   const markClean = useCallback(() => {
     setIsDirty(false);
   }, []);
 
   const value: SongContextValue = {
-    // Current document (V1 and V2)
+    // Current document
     song,
-    songV2,
     isLoading,
     isDirty,
 
     // Load/create
     loadSong,
-    createNewSong,
-    loadSampleSong,
-    createNewSongV2,
+    createNewSong: createNewSongFn,
 
-    // Chord operations (V1)
+    // Chord operations
     insertChord,
     updateChord,
     moveChord,
     deleteChord,
 
-    // Line operations (V1)
-    updateLine,
-    updateLineWithMode,
-    insertLine,
-    deleteLine,
-
-    // Block operations (V2)
+    // Block operations
     insertBlock,
     insertBlockBefore,
     insertBlockInstance,
@@ -711,6 +712,7 @@ export function SongProvider({ children }: SongProviderProps) {
     deleteBlock,
     updateBlock: updateBlockOp,
     duplicateBlock,
+    updateBlockLyrics,
 
     // Clipboard operations
     clipboard,

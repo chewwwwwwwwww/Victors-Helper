@@ -31,6 +31,12 @@ export interface BlockRenderContext {
   onChordDoubleClick: (ref: ChordReference, event?: React.MouseEvent) => void;
   onChordMove: (ref: ChordReference, newCharIndex: number) => void;
 
+  // Chord drag operations
+  onChordDragStart: (ref: ChordReference, startX: number) => void;
+  onChordDragMove: (clientX: number) => void;
+  onChordDragEnd: () => void;
+  getDragPreviewCharIndex: (lineId: string) => number | null;
+
   // Lyric operations
   onLyricEditModeChange: (mode: LyricEditMode) => void;
   onLyricCommit: (blockId: UUID, newValue: string, mode: LyricEditMode) => void;
